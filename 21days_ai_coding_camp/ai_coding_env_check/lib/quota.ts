@@ -67,21 +67,21 @@ export async function getActivePlanDefinition(
 ) {
   const { data: subscription } = await supabase
     .from('subscriptions')
-    .select<SubscriptionRow>('plan_id')
+    .select('plan_id')
     .eq('user_id', userId)
     .eq('status', 'active')
     .gt('current_period_end', nowIso)
     .order('current_period_end', { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .maybeSingle<SubscriptionRow>();
 
   const planId = subscription?.plan_id ?? DEFAULT_PLAN_ID;
 
   const { data: planRow } = await supabase
     .from('plans')
-    .select<PlanRow>('id, name, ghost_mini_quota, ghost_pro_quota, max_words')
+    .select('id, name, ghost_mini_quota, ghost_pro_quota, max_words')
     .eq('id', planId)
-    .maybeSingle();
+    .maybeSingle<PlanRow>();
 
   return mapPlanRow(planRow) ?? PLAN_RECORD[planId] ?? PLAN_RECORD[DEFAULT_PLAN_ID];
 }
@@ -101,10 +101,10 @@ export async function getTodayUsageCounter(
 ): Promise<UsageCounterRow | null> {
   const { data } = await supabase
     .from('usage_counters')
-    .select<UsageCounterRow>('id, plan_id, ghost_mini_used, ghost_pro_used')
+    .select('id, plan_id, ghost_mini_used, ghost_pro_used')
     .eq('user_id', userId)
     .eq('usage_date', usageDate)
-    .maybeSingle();
+    .maybeSingle<UsageCounterRow>();
 
   return data ?? null;
 }
