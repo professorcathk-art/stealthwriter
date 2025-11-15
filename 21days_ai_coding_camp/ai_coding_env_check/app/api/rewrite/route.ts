@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
       const { data: inserted, error: insertUsageError } = await supabase
         .from('usage_counters')
         .insert(insertPayload)
-        .select('id, ghost_mini_used, ghost_pro_used')
+        .select('id, plan_id, ghost_mini_used, ghost_pro_used')
         .maybeSingle();
 
       if (insertUsageError) {
