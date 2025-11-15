@@ -1,20 +1,53 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser';
 
 type RewriteResponse = {
   rewritten: string;
 };
 
+type UsageResponse = {
+  plan: {
+    id: string;
+    name: string;
+    limits: {
+      ghostMiniQuota: number | null;
+      ghostProQuota: number | null;
+      maxWords: number | null;
+    };
+  };
+  usage: {
+    date: string;
+    ghostMini: {
+      used: number;
+      limit: number | null;
+      remaining: number | null;
+    };
+    ghostPro: {
+      used: number;
+      limit: number | null;
+      remaining: number | null;
+    };
+  };
+};
+
 const MIN_INPUT_LENGTH = 8;
 
+type AuthState = 'loading' | 'signed-in' | 'signed-out';
+
 export default function RewriteForm() {
+  const supabase = getSupabaseBrowserClient();
   const [input, setInput] = useState('');
   const [rewritten, setRewritten] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCopied, setHasCopied] = useState(false);
   const [copyTimer, setCopyTimer] = useState<NodeJS.Timeout | null>(null);
+  const [authState, setAuthState] = useState<AuthState>('loading');
+  const [usageInfo, setUsageInfo] = useState<UsageResponse | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -24,18 +57,111 @@ export default function RewriteForm() {
     };
   }, [copyTimer]);
 
-  const disabled = useMemo(
-    () => loading || input.trim().length < MIN_INPUT_LENGTH,
-    [loading, input]
-  );
+  useEffect(() => {
+    if (!supabase) {
+      setAuthState('signed-out');
+      setUsageInfo(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!isMounted) return;
+        setAuthState(data.session ? 'signed-in' : 'signed-out');
+      })
+      .catch(() => {
+        if (isMounted) setAuthState('signed-out');
+      });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthState(session ? 'signed-in' : 'signed-out');
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  const fetchUsage = useCallback(async () => {
+    if (!supabase) return;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      setUsageInfo(null);
+      return;
+    }
+
+    setUsageLoading(true);
+    setUsageError(null);
+    try {
+      const response = await fetch('/api/usage', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const { error: message } = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(message || '無法取得配額資訊。');
+      }
+
+      const data = (await response.json()) as UsageResponse;
+      setUsageInfo(data);
+    } catch (err) {
+      console.error('Usage fetch error', err);
+      setUsageInfo(null);
+      setUsageError(err instanceof Error ? err.message : '讀取配額失敗，請稍後再試。');
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    if (authState !== 'signed-in') {
+      setUsageInfo(null);
+      return;
+    }
+    fetchUsage();
+  }, [authState, fetchUsage]);
+
+  const disabled = useMemo(() => {
+    if (authState !== 'signed-in') return true;
+    return loading || input.trim().length < MIN_INPUT_LENGTH;
+  }, [authState, loading, input]);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
 
+      if (!supabase) {
+        setError('Supabase 尚未初始化，請稍後再試。');
+        return;
+      }
+
+      if (authState !== 'signed-in') {
+        setError('請先登入，即可依方案使用每日改寫額度。');
+        return;
+      }
+
       const text = input.trim();
       if (text.length < MIN_INPUT_LENGTH) {
         setError(`請至少輸入 ${MIN_INPUT_LENGTH} 個字元的內容。`);
+        return;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setError('登入資訊已過期，請重新登入。');
         return;
       }
 
@@ -48,6 +174,7 @@ export default function RewriteForm() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({ text }),
         });
@@ -66,6 +193,7 @@ export default function RewriteForm() {
         }
 
         setRewritten(data.rewritten.trim());
+        fetchUsage();
       } catch (err) {
         console.error('Rewrite error', err);
         setError(err instanceof Error ? err.message : '服務器出現問題，請稍後再試。');
@@ -73,7 +201,7 @@ export default function RewriteForm() {
         setLoading(false);
       }
     },
-    [input]
+    [authState, fetchUsage, input, supabase]
   );
 
   const handleCopy = useCallback(async () => {
@@ -99,6 +227,56 @@ export default function RewriteForm() {
       className="rounded-2xl border border-slate-800 bg-slate-900/60 p-8 shadow-lg shadow-black/20 backdrop-blur"
     >
       <div className="space-y-6">
+        {authState !== 'signed-in' ? (
+          <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            請先登入（右上角登入/註冊），即可依定價方案使用每日 Ghost Pro 額度。
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-5 py-4 text-sm text-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-indigo-300">目前方案</p>
+                <p className="text-lg font-semibold">
+                  {usageLoading ? '讀取中…' : usageInfo?.plan.name ?? 'Free'}
+                </p>
+              </div>
+              {usageInfo?.plan?.limits.maxWords !== undefined && (
+                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400">
+                  單次上限{' '}
+                  {usageInfo?.plan?.limits.maxWords
+                    ? usageInfo.plan.limits.maxWords.toLocaleString()
+                    : '無限制'}{' '}
+                  字
+                </span>
+              )}
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs text-slate-500">Ghost Pro (每日)</p>
+                <p className="text-base font-medium">
+                  {usageInfo?.usage?.ghostPro.limit === null
+                    ? '無限次數'
+                    : `${usageInfo?.usage?.ghostPro.remaining ?? 0}/${
+                        usageInfo?.usage?.ghostPro.limit ?? 0
+                      } 次剩餘`}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Ghost Mini (每日)</p>
+                <p className="text-base font-medium">
+                  {usageInfo?.usage?.ghostMini.limit === null
+                    ? '無限次數'
+                    : `${usageInfo?.usage?.ghostMini.remaining ?? 0}/${
+                        usageInfo?.usage?.ghostMini.limit ?? 0
+                      } 次剩餘`}
+                </p>
+              </div>
+            </div>
+            {usageError && (
+              <p className="mt-3 text-xs text-amber-300">配額資訊：{usageError}</p>
+            )}
+          </div>
+        )}
         <div className="space-y-2">
           <label
             htmlFor="rewrite-input"

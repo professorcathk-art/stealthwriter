@@ -72,18 +72,31 @@ export default function AuthNav() {
     }
   }, [router, supabase]);
 
+  const pricingLink = (
+    <Link
+      href="/pricing"
+      className="rounded-full border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 transition hover:border-indigo-400 hover:text-indigo-200"
+    >
+      定價方案
+    </Link>
+  );
+
   const content = useMemo(() => {
     if (authStatus.state === 'loading') {
       return (
-        <span className="rounded-full border border-slate-800 px-4 py-2 text-xs text-slate-500">
-          驗證狀態載入中…
-        </span>
+        <div className="flex items-center gap-3">
+          {pricingLink}
+          <span className="rounded-full border border-slate-800 px-4 py-2 text-xs text-slate-500">
+            驗證狀態載入中…
+          </span>
+        </div>
       );
     }
 
     if (authStatus.state === 'signed-in') {
       return (
         <div className="flex items-center gap-3">
+          {pricingLink}
           {authStatus.email && (
             <span className="rounded-full border border-slate-800 px-4 py-2 text-xs text-slate-300">
               {authStatus.email}
@@ -103,6 +116,7 @@ export default function AuthNav() {
 
     return (
       <div className="flex items-center gap-3">
+        {pricingLink}
         <Link
           href="/login"
           className="rounded-full border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 transition hover:border-indigo-400 hover:text-indigo-200"
