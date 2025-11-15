@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
     }
 
     const usageDate = todayIsoDate();
-    const usage = await getTodayUsageCounter(supabase, userId, usageDate);
+    let usage = await getTodayUsageCounter(supabase, userId, usageDate);
     const usageLimit =
       usageMode === 'ghost_mini' ? plan.limits.ghostMiniQuota : plan.limits.ghostProQuota;
     const alreadyUsed =
@@ -127,6 +127,24 @@ export async function POST(request: NextRequest) {
 
     const nextUsageValue = alreadyUsed + 1;
 
+    const applyUsageUpdate = async (counterId: string, miniValue?: number, proValue?: number) => {
+      const updatePayload: Record<string, unknown> = {
+        plan_id: plan.id,
+        updated_at: nowIso,
+      };
+      if (miniValue !== undefined) updatePayload.ghost_mini_used = miniValue;
+      if (proValue !== undefined) updatePayload.ghost_pro_used = proValue;
+
+      const { error: updateError } = await supabase
+        .from('usage_counters')
+        .update(updatePayload)
+        .eq('id', counterId);
+
+      if (updateError) {
+        console.error('Update usage error', updateError);
+      }
+    };
+
     if (usage?.id) {
       const updatePayload: Record<string, unknown> = {
         plan_id: plan.id,
@@ -154,12 +172,33 @@ export async function POST(request: NextRequest) {
         ghost_mini_used: usageMode === 'ghost_mini' ? 1 : usage?.ghost_mini_used ?? 0,
         ghost_pro_used: usageMode === 'ghost_pro' ? 1 : usage?.ghost_pro_used ?? 0,
       };
-      const { error: insertUsageError } = await supabase.from('usage_counters').insert(
-        insertPayload
-      );
+      const { data: inserted, error: insertUsageError } = await supabase
+        .from('usage_counters')
+        .insert(insertPayload)
+        .select('id, ghost_mini_used, ghost_pro_used')
+        .maybeSingle();
 
       if (insertUsageError) {
-        console.error('Insert usage error', insertUsageError);
+        if (insertUsageError.code === '23505') {
+          const refreshed = await getTodayUsageCounter(supabase, userId, usageDate);
+          if (refreshed?.id) {
+            const miniValue =
+              usageMode === 'ghost_mini'
+                ? (refreshed.ghost_mini_used ?? 0) + 1
+                : refreshed.ghost_mini_used ?? 0;
+            const proValue =
+              usageMode === 'ghost_pro'
+                ? (refreshed.ghost_pro_used ?? 0) + 1
+                : refreshed.ghost_pro_used ?? 0;
+            await applyUsageUpdate(refreshed.id, miniValue, proValue);
+          } else {
+            console.error('Insert usage conflict but unable to refresh usage row');
+          }
+        } else {
+          console.error('Insert usage error', insertUsageError);
+        }
+      } else if (inserted?.id) {
+        usage = inserted;
       }
     }
 
