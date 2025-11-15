@@ -98,7 +98,7 @@ export async function getTodayUsageCounter(
   supabase: SupabaseClient,
   userId: string,
   usageDate: string
-) {
+): Promise<UsageCounterRow | null> {
   const { data } = await supabase
     .from('usage_counters')
     .select<UsageCounterRow>('id, plan_id, ghost_mini_used, ghost_pro_used')
