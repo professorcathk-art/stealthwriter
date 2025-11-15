@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseAdminClient } from '@/lib/supabase-admin';
+import { getSupabaseAdminClient, getSupabaseAuthClient } from '@/lib/supabase-admin';
 import {
   getActivePlanDefinition,
   getTodayUsageCounter,
@@ -20,8 +20,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabaseAdminClient(accessToken);
-    const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+    const supabaseAuth = getSupabaseAuthClient(accessToken);
+    const { data: userData, error: userError } = await supabaseAuth.auth.getUser(accessToken);
 
     if (userError || !userData.user) {
       console.error('Usage API auth error', userError);
@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
     const userId = userData.user.id;
     const nowIso = new Date().toISOString();
 
+    const supabase = getSupabaseAdminClient(accessToken);
     const plan = await getActivePlanDefinition(supabase, userId, nowIso);
     const usageDate = todayIsoDate();
     const usage = await getTodayUsageCounter(supabase, userId, usageDate);

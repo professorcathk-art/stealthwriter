@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseAdminClient } from '@/lib/supabase-admin';
+import { getSupabaseAdminClient, getSupabaseAuthClient } from '@/lib/supabase-admin';
 import {
   countWordsApprox,
   getActivePlanDefinition,
@@ -34,8 +34,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabaseAdminClient(accessToken);
-    const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+    const supabaseAuth = getSupabaseAuthClient(accessToken);
+    const { data: userData, error: userError } = await supabaseAuth.auth.getUser(accessToken);
 
     if (userError || !userData.user) {
       console.error('Supabase auth error', userError);
@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
     const userId = userData.user.id;
     const nowIso = new Date().toISOString();
 
+    const supabase = getSupabaseAdminClient(accessToken);
     const plan = await getActivePlanDefinition(supabase, userId, nowIso);
     const usageMode = resolveUsageMode(plan);
     const usageLabel = usageMode === 'ghost_mini' ? 'Ghost Mini' : 'Ghost Pro';
