@@ -19,7 +19,7 @@ async function getAccessTokenFromRequest(request: NextRequest): Promise<string |
   }
 
   // Try to get from cookies
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const accessToken = cookieStore.get('sb-access-token')?.value;
   if (accessToken) {
     return accessToken;
