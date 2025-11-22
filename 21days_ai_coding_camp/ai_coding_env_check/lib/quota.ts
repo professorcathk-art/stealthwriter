@@ -1,10 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import {
-  DEFAULT_PLAN_ID,
-  PLAN_RECORD,
-  type PlanDefinition,
-  type PlanTier,
-} from './pricing';
 
 type PlanRow = {
   id: PlanTier;
@@ -20,7 +14,7 @@ type SubscriptionRow = {
 
 export type UsageCounterRow = {
   id: string;
-  plan_id: PlanTier;
+  plan_id: string;
   ghost_mini_used: number;
   ghost_pro_used: number;
 };
@@ -45,26 +39,44 @@ export function todayIsoDate(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-function mapPlanRow(row?: PlanRow | null) {
+type PlanDefinition = {
+  id: 'pro';
+  name: string;
+  limits: {
+    ghostMiniQuota: number | null;
+    ghostProQuota: number | null;
+    maxWords: number | null;
+  };
+};
+
+const FALLBACK_PLAN: PlanDefinition = {
+  id: 'pro',
+  name: 'StealthWriter Pro',
+  limits: {
+    ghostMiniQuota: null,
+    ghostProQuota: null,
+    maxWords: 5000,
+  },
+};
+
+function mapPlanRow(row?: PlanRow | null): PlanDefinition | null {
   if (!row) return null;
-  const fallback = PLAN_RECORD[row.id] ?? PLAN_RECORD[DEFAULT_PLAN_ID];
   return {
-    ...fallback,
-    id: row.id,
-    name: row.name ?? fallback.name,
+    id: 'pro',
+    name: row.name ?? FALLBACK_PLAN.name,
     limits: {
-      ghostMiniQuota: row.ghost_mini_quota ?? fallback.limits.ghostMiniQuota,
-      ghostProQuota: row.ghost_pro_quota ?? fallback.limits.ghostProQuota,
-      maxWords: row.max_words ?? fallback.limits.maxWords,
+      ghostMiniQuota: row.ghost_mini_quota ?? FALLBACK_PLAN.limits.ghostMiniQuota,
+      ghostProQuota: row.ghost_pro_quota ?? FALLBACK_PLAN.limits.ghostProQuota,
+      maxWords: row.max_words ?? FALLBACK_PLAN.limits.maxWords,
     },
-  } satisfies PlanDefinition;
+  };
 }
 
 export async function getActivePlanDefinition(
   supabase: SupabaseClient,
   userId: string,
   nowIso: string
-) {
+): Promise<PlanDefinition> {
   const { data: subscription } = await supabase
     .from('subscriptions')
     .select('plan_id')
@@ -75,7 +87,7 @@ export async function getActivePlanDefinition(
     .limit(1)
     .maybeSingle<SubscriptionRow>();
 
-  const planId = subscription?.plan_id ?? DEFAULT_PLAN_ID;
+  const planId = subscription?.plan_id ?? 'pro';
 
   const { data: planRow } = await supabase
     .from('plans')
@@ -83,7 +95,7 @@ export async function getActivePlanDefinition(
     .eq('id', planId)
     .maybeSingle<PlanRow>();
 
-  return mapPlanRow(planRow) ?? PLAN_RECORD[planId] ?? PLAN_RECORD[DEFAULT_PLAN_ID];
+  return mapPlanRow(planRow) ?? FALLBACK_PLAN;
 }
 
 export function resolveUsageMode(plan: PlanDefinition): UsageMode {

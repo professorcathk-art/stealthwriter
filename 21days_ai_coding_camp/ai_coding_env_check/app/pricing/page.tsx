@@ -1,5 +1,6 @@
+use client;
+
 import { useCallback, useMemo, useState } from 'react';
-import { RevalidateTag } from 'next/dist/shared/lib/constants';
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser';
 import { PRO_PLAN, type BillingCycle } from '@/lib/pricing';
 
