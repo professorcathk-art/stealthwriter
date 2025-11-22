@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type PlanRow = {
-  id: PlanTier;
+  id: string;
   name?: string;
   ghost_mini_quota: number | null;
   ghost_pro_quota: number | null;
@@ -9,7 +9,7 @@ type PlanRow = {
 };
 
 type SubscriptionRow = {
-  plan_id: PlanTier;
+  plan_id: string;
 };
 
 export type UsageCounterRow = {
