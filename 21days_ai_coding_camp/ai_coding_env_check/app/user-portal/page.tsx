@@ -1,4 +1,11 @@
 import { cookies } from 'next/headers';
+import { createClient } from '@supabase/supabase-js';
+import { getSupabaseAdminClient, getSupabaseAuthClient } from '@/lib/supabase-admin';
+import {
+  getActivePlanDefinition,
+  getTodayUsageCounter,
+  todayIsoDate,
+} from '@/lib/quota';
 
 type AccountSummary = {
   plan: {
@@ -35,26 +42,96 @@ type AccountSummary = {
   } | null;
 };
 
-async function fetchAccountSummary() {
-  const cookieHeader = cookies().toString();
-  const url = `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/account/summary`;
-  const res = await fetch(url, {
-    headers: { cookie: cookieHeader },
-    cache: 'no-store',
-  });
+async function getAccountSummary(): Promise<AccountSummary | null> {
+  const cookieStore = cookies();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '';
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
-  if (!res.ok) {
-    throw new Error(`Unable to load account summary (${res.status})`);
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
   }
 
-  return (await res.json()) as AccountSummary;
+  // Create a Supabase client that reads from cookies
+  const cookieHeader = cookieStore.toString();
+  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+    global: {
+      headers: {
+        Cookie: cookieHeader,
+      },
+    },
+  });
+
+  // Get session from cookies
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+  if (sessionError || !session?.access_token) {
+    return null;
+  }
+
+  const accessToken = session.access_token;
+  const supabaseAuth = getSupabaseAuthClient(accessToken);
+  const { data: userData, error: userError } = await supabaseAuth.auth.getUser(accessToken);
+
+  if (userError || !userData.user) {
+    return null;
+  }
+
+  const userId = userData.user.id;
+  const supabaseAdmin = getSupabaseAdminClient();
+  const nowIso = new Date().toISOString();
+  const plan = await getActivePlanDefinition(supabaseAdmin, userId, nowIso);
+  const usageDate = todayIsoDate();
+  const usage = await getTodayUsageCounter(supabaseAdmin, userId, usageDate);
+
+  const { data: order } = await supabaseAdmin
+    .from('orders')
+    .select('status, cycle, stripe_link, stripe_session_id, stripe_customer_id, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: subscription } = await supabaseAdmin
+    .from('subscriptions')
+    .select(
+      'status, billing_cycle, current_period_start, current_period_end, stripe_subscription_id, stripe_customer_id'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    plan: {
+      name: plan.name,
+      maxWords: plan.limits.maxWords,
+      ghostMiniQuota: plan.limits.ghostMiniQuota,
+      ghostProQuota: plan.limits.ghostProQuota,
+    },
+    usage: {
+      date: usageDate,
+      ghostMini: {
+        used: usage?.ghost_mini_used ?? 0,
+        limit: plan.limits.ghostMiniQuota,
+      },
+      ghostPro: {
+        used: usage?.ghost_pro_used ?? 0,
+        limit: plan.limits.ghostProQuota,
+      },
+    },
+    subscription,
+    order,
+  };
 }
 
 export default async function UserPortalPage() {
-  let summary: AccountSummary | null = null;
-  try {
-    summary = await fetchAccountSummary();
-  } catch (error) {
+  const summary = await getAccountSummary();
+
+  if (!summary) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-16 text-white">
         <div className="rounded-3xl border border-rose-500/60 bg-rose-500/10 p-8 text-center">

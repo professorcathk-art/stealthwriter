@@ -97,6 +97,12 @@ export default function AuthNav() {
       return (
         <div className="flex items-center gap-3">
           {pricingLink}
+          <Link
+            href="/user-portal"
+            className="rounded-full border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 transition hover:border-indigo-400 hover:text-indigo-200"
+          >
+            會員中心
+          </Link>
           {authStatus.email && (
             <span className="rounded-full border border-slate-800 px-4 py-2 text-xs text-slate-300">
               {authStatus.email}

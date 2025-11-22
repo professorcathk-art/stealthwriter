@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { createClient } from '@supabase/supabase-js';
 import {
   getSupabaseAdminClient,
   getSupabaseAuthClient,
@@ -9,11 +11,48 @@ import {
   todayIsoDate,
 } from '@/lib/quota';
 
-export async function GET(request: NextRequest) {
+async function getAccessTokenFromRequest(request: NextRequest): Promise<string | null> {
+  // Try Authorization header first
   const authHeader = request.headers.get('authorization');
-  const accessToken = authHeader?.startsWith('Bearer ')
-    ? authHeader.slice(7).trim()
-    : null;
+  if (authHeader?.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  // Try to get from cookies
+  const cookieStore = cookies();
+  const accessToken = cookieStore.get('sb-access-token')?.value;
+  if (accessToken) {
+    return accessToken;
+  }
+
+  // Try to get session from Supabase cookies
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '';
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+  
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+
+  // Create a client with cookies to extract session
+  const cookieHeader = request.headers.get('cookie') ?? '';
+  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+    global: {
+      headers: {
+        Cookie: cookieHeader,
+      },
+    },
+  });
+
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
+
+export async function GET(request: NextRequest) {
+  const accessToken = await getAccessTokenFromRequest(request);
 
   if (!accessToken) {
     return NextResponse.json({ error: 'Authorization missing' }, { status: 401 });
