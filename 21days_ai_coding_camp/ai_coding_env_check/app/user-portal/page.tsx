@@ -1,11 +1,7 @@
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
-import { getSupabaseAdminClient, getSupabaseAuthClient } from '@/lib/supabase-admin';
-import {
-  getActivePlanDefinition,
-  getTodayUsageCounter,
-  todayIsoDate,
-} from '@/lib/quota';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser';
 
 type AccountSummary = {
   plan: {
@@ -42,100 +38,86 @@ type AccountSummary = {
   } | null;
 };
 
-async function getAccountSummary(): Promise<AccountSummary | null> {
-  const cookieStore = await cookies();
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '';
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+export default function UserPortalPage() {
+  const supabase = getSupabaseBrowserClient();
+  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<AccountSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return null;
-  }
+  useEffect(() => {
+    async function fetchAccountSummary() {
+      if (!supabase) {
+        setError('無法初始化 Supabase 客戶端');
+        setLoading(false);
+        return;
+      }
 
-  // Create a Supabase server client that properly reads from cookies
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet) {
-        try {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
-          });
-        } catch {
-          // The `setAll` method was called from a Server Component.
-          // This can be ignored if you have middleware refreshing
-          // user sessions.
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+        if (sessionError || !session?.access_token) {
+          setError(null);
+          setSummary(null);
+          setLoading(false);
+          return;
         }
-      },
-    },
-  });
 
-  // Get session from cookies
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        const res = await fetch('/api/account/summary', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
 
-  if (sessionError || !session?.access_token) {
-    return null;
+        if (!res.ok) {
+          if (res.status === 401) {
+            setError(null);
+            setSummary(null);
+            setLoading(false);
+            return;
+          }
+          throw new Error(`無法載入帳戶資訊 (${res.status})`);
+        }
+
+        const data = (await res.json()) as AccountSummary;
+        setSummary(data);
+        setError(null);
+      } catch (err) {
+        console.error('Fetch account summary error', err);
+        setError(err instanceof Error ? err.message : '無法載入帳戶資訊');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchAccountSummary();
+  }, [supabase]);
+
+  const formatDate = (value?: string | null) =>
+    value ? new Date(value).toLocaleString('zh-TW') : 'N/A';
+
+  const remaining = (limit: number | null, used: number) =>
+    limit === null ? '無限' : Math.max(limit - used, 0);
+
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-16 text-white">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/60 p-8 text-center">
+          <p className="text-sm text-slate-400">載入中…</p>
+        </div>
+      </main>
+    );
   }
 
-  const accessToken = session.access_token;
-  const supabaseAuth = getSupabaseAuthClient(accessToken);
-  const { data: userData, error: userError } = await supabaseAuth.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return null;
+  if (error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-16 text-white">
+        <div className="rounded-3xl border border-rose-500/60 bg-rose-500/10 p-8 text-center">
+          <h1 className="text-2xl font-semibold">載入錯誤</h1>
+          <p className="mt-2 text-sm text-rose-200">{error}</p>
+        </div>
+      </main>
+    );
   }
-
-  const userId = userData.user.id;
-  const supabaseAdmin = getSupabaseAdminClient();
-  const nowIso = new Date().toISOString();
-  const plan = await getActivePlanDefinition(supabaseAdmin, userId, nowIso);
-  const usageDate = todayIsoDate();
-  const usage = await getTodayUsageCounter(supabaseAdmin, userId, usageDate);
-
-  const { data: order } = await supabaseAdmin
-    .from('orders')
-    .select('status, cycle, stripe_link, stripe_session_id, stripe_customer_id, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const { data: subscription } = await supabaseAdmin
-    .from('subscriptions')
-    .select(
-      'status, billing_cycle, current_period_start, current_period_end, stripe_subscription_id, stripe_customer_id'
-    )
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  return {
-    plan: {
-      name: plan.name,
-      maxWords: plan.limits.maxWords,
-      ghostMiniQuota: plan.limits.ghostMiniQuota,
-      ghostProQuota: plan.limits.ghostProQuota,
-    },
-    usage: {
-      date: usageDate,
-      ghostMini: {
-        used: usage?.ghost_mini_used ?? 0,
-        limit: plan.limits.ghostMiniQuota,
-      },
-      ghostPro: {
-        used: usage?.ghost_pro_used ?? 0,
-        limit: plan.limits.ghostProQuota,
-      },
-    },
-    subscription,
-    order,
-  };
-}
-
-export default async function UserPortalPage() {
-  const summary = await getAccountSummary();
 
   if (!summary) {
     return (
@@ -151,12 +133,6 @@ export default async function UserPortalPage() {
   }
 
   const { plan, usage, subscription, order } = summary;
-
-  const formatDate = (value?: string | null) =>
-    value ? new Date(value).toLocaleString('zh-TW') : 'N/A';
-
-  const remaining = (limit: number | null, used: number) =>
-    limit === null ? '無限' : Math.max(limit - used, 0);
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-12 text-white">
@@ -280,4 +256,3 @@ export default async function UserPortalPage() {
     </main>
   );
 }
-
