@@ -30,13 +30,17 @@ export default function PricingPage() {
   );
 
   const handleSubscribe = useCallback(async () => {
+    if (!client) {
+      setMessage('Supabase 客戶端尚未初始化，請稍後再試。');
+      return;
+    }
     setIsSubmitting(true);
     setMessage(null);
 
     const {
       data: { session },
       error: sessionError,
-    } = await client.auth.getSession();
+    } = client ? await client.auth.getSession() : { data: { session: null }, error: new Error('Supabase client missing') };
 
     if (sessionError || !session?.access_token) {
       setMessage('請先登入才能訂閱。');
