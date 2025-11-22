@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { createClient } from '@supabase/supabase-js';
+import { createServerClient } from '@supabase/ssr';
 import { getSupabaseAdminClient, getSupabaseAuthClient } from '@/lib/supabase-admin';
 import {
   getActivePlanDefinition,
@@ -51,16 +51,22 @@ async function getAccountSummary(): Promise<AccountSummary | null> {
     return null;
   }
 
-  // Create a Supabase client that reads from cookies
-  const cookieHeader = cookieStore.toString();
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-    global: {
-      headers: {
-        Cookie: cookieHeader,
+  // Create a Supabase server client that properly reads from cookies
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // The `setAll` method was called from a Server Component.
+          // This can be ignored if you have middleware refreshing
+          // user sessions.
+        }
       },
     },
   });
