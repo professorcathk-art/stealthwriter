@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
 import {
   getSupabaseAdminClient,
   getSupabaseAuthClient,
 } from '@/lib/supabase-admin';
 
-const STRIPE_LINKS = {
-  monthly: 'https://buy.stripe.com/test_8x2eVfbrR0effV20Zr0Ny01',
-  yearly: 'https://buy.stripe.com/test_cNi14p3Zpgdd9wE0Zr0Ny00',
-} as const;
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '', {
+  apiVersion: '2022-11-15',
+});
 
 type BillingCycle = 'monthly' | 'yearly';
 
 type OrderPayload = {
   cycle: BillingCycle;
 };
+
+const APP_URL = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'https://stealthwriter-amber.vercel.app';
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,7 +43,7 @@ export async function POST(request: NextRequest) {
 
     const payload = (await request.json().catch(() => ({}))) as OrderPayload;
     const cycle: BillingCycle = payload.cycle === 'yearly' ? 'yearly' : 'monthly';
-    const stripeLink = STRIPE_LINKS[cycle];
+    const amount = cycle === 'yearly' ? 5900 : 799;
 
     const supabase = getSupabaseAdminClient();
     const { data: order, error: insertError } = await supabase
@@ -51,7 +53,6 @@ export async function POST(request: NextRequest) {
         plan: 'pro',
         cycle,
         status: 'pending',
-        stripe_link: stripeLink,
       })
       .select('id')
       .maybeSingle();
@@ -71,9 +72,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'StealthWriter Pro',
+            },
+            recurring: {
+              interval: cycle === 'yearly' ? 'year' : 'month',
+            },
+            unit_amount: amount,
+          },
+          quantity: 1,
+        },
+      ],
+      success_url: `${APP_URL}/?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${APP_URL}/pricing?cancelled=1`,
+      customer_email: userData.user.email ?? undefined,
+      client_reference_id: order.id,
+    });
+
+    await supabase
+      .from('orders')
+      .update({
+        stripe_link: session.url,
+        stripe_session_id: session.id,
+      })
+      .eq('id', order.id);
+
     return NextResponse.json({
       orderId: order.id,
-      paymentLink: stripeLink,
+      paymentLink: session.url,
     });
   } catch (error) {
     console.error('Create order error', error);
